@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -48,15 +47,110 @@ idx = rng.choice(len(DISTRICTS), size=N_ROWS, p=weights)
 
 records = []
 
+# ── Привязка расстояния от центра к микрорайону ──────────────────────
+NBHD_DIST = {
+    "Центр / Кремль":      0.8,
+    "Лесопарк / Борки":    2.5,
+    "Кальное":             3.5,
+    "Солотча":             8.0,
+    "Бутырки":             4.5,
+    "Московский":          4.0,
+    "Приокский":           5.0,
+    "Канищево":            6.0,
+    "Юбилейный":           5.5,
+    "Красный":             4.5,
+    "Дягилево":            7.0,
+    "Мервино":            10.0,
+    "Недостоево":         12.0,
+    "Дашково-Песочня":     6.0,
+    "Центральный":         3.0,
+    "Шереметьево-Песочня": 7.5,
+    "Мирный":              8.0,
+    "Голенчино":          12.0,
+    "Никуличи":           14.0,
+    "Строитель":          10.5,
+    "Горроща":             6.5,
+    "Октябрьский городок": 7.5,
+    "Ленпоселок":          8.0,
+    "Южный":               9.5,
+    "Михайловское шоссе": 11.0,
+    "Мехзавод / Храпово": 13.0,
+}
+
 HOUSE_TYPES  = ["панель", "монолит", "кирпич", "блок"]
-HOUSE_PROBS  = [0.40, 0.25, 0.25, 0.10]
 RENOV_TYPES  = ["без ремонта", "косметический", "евроремонт", "дизайнерский"]
 RENOV_PROBS  = [0.20, 0.45, 0.28, 0.07]
 RENOV_MULT   = {"без ремонта": 0.90, "косметический": 1.00,
                 "евроремонт": 1.10, "дизайнерский": 1.20}
 HOUSE_MULT   = {"панель": 0.95, "монолит": 1.05, "кирпич": 1.03, "блок": 0.97}
-FLOORS_POOL  = [5, 9, 10, 12, 16, 17, 25]
-FLOORS_PROBS = [0.20, 0.20, 0.10, 0.15, 0.20, 0.10, 0.05]
+
+# Эпохи строительства → допустимые этажности и типы домов
+# (старые дома низкие и панельные, новостройки высокие и монолитные)
+ERA_RANGES = {
+    "1960-1980": {
+        "years":       (1960, 1980),
+        "house_types": ["панель", "кирпич"],
+        "house_probs": [0.70, 0.30],
+        "floors":      [5],
+        "floor_probs": [1.0],
+    },
+    "1981-1995": {
+        "years":       (1981, 1995),
+        "house_types": ["панель", "кирпич", "блок"],
+        "house_probs": [0.50, 0.30, 0.20],
+        "floors":      [5, 9, 10],
+        "floor_probs": [0.15, 0.50, 0.35],
+    },
+    "1996-2010": {
+        "years":       (1996, 2010),
+        "house_types": ["панель", "монолит", "кирпич", "блок"],
+        "house_probs": [0.25, 0.25, 0.30, 0.20],
+        "floors":      [9, 10, 12, 16],
+        "floor_probs": [0.10, 0.20, 0.35, 0.35],
+    },
+    "2011-2025": {
+        "years":       (2011, 2025),
+        "house_types": ["монолит", "кирпич", "блок"],
+        "house_probs": [0.50, 0.25, 0.25],
+        "floors":      [12, 16, 17, 25],
+        "floor_probs": [0.15, 0.30, 0.30, 0.25],
+    },
+}
+ERA_KEYS = list(ERA_RANGES.keys())
+ERA_WEIGHTS = [0.18, 0.22, 0.28, 0.32]  # слегка в сторону новостроек
+
+
+def floor_multiplier(floor, total_floors):
+    floor_ratio = floor / total_floors
+    if floor_ratio <= 0.1:
+        return 0.95
+    elif floor_ratio <= 0.2:
+        return 0.98
+    elif 0.2 < floor_ratio <= 0.8:
+        return 1.00 + 0.02 * (floor_ratio - 0.5)
+    elif floor_ratio <= 0.95:
+        return 0.97
+    else:
+        return 0.94
+
+
+def pick_rooms(area):
+    """Реалистичная привязка комнат к площади."""
+    if area < 28:
+        return 1  # студии / малосемейки
+    elif area < 42:
+        return int(rng.choice([1, 2], p=[0.80, 0.20]))
+    elif area < 55:
+        return int(rng.choice([1, 2], p=[0.20, 0.80]))
+    elif area < 70:
+        return int(rng.choice([2, 3], p=[0.50, 0.50]))
+    elif area < 90:
+        return int(rng.choice([2, 3], p=[0.30, 0.70]))
+    elif area < 110:
+        return int(rng.choice([3, 4], p=[0.60, 0.40]))
+    else:
+        return int(rng.choice([3, 4, 5], p=[0.20, 0.50, 0.30]))
+
 
 for i in range(N_ROWS):
     d_idx = idx[i]
@@ -64,31 +158,36 @@ for i in range(N_ROWS):
     nbhd   = nbhd_list[d_idx]
     coef   = coef_list[d_idx]
 
-    street    = fake.street_name()          # улица
-    house_num = fake.building_number()      # номер дома
+    street    = fake.street_name()
+    house_num = fake.building_number()
 
-    area        = round(float(np.clip(rng.lognormal(3.85, 0.45), 20, 150)), 1)
-    total_floors = int(rng.choice(FLOORS_POOL, p=FLOORS_PROBS))
+    # ── Эпоха → тип дома, этажность, год ──────────────────────────
+    era_key = str(rng.choice(ERA_KEYS, p=ERA_WEIGHTS))
+    era     = ERA_RANGES[era_key]
+
+    year_built   = int(rng.integers(*era["years"]))
+    house_type   = str(rng.choice(era["house_types"], p=era["house_probs"]))
+    total_floors = int(rng.choice(era["floors"], p=era["floor_probs"]))
     floor        = int(rng.integers(1, total_floors + 1))
-    year_built   = int(rng.integers(1960, 2025))
-    dist_center  = round(float(np.clip(
-                       rng.normal((1.35 - coef) * 12 + 2, 1.5), 0.5, 25)), 1)
 
-    if area < 35:
-        rooms = 1
-    elif area < 60:
-        rooms = int(rng.choice([1, 2], p=[0.3, 0.7]))
-    elif area < 90:
-        rooms = int(rng.choice([2, 3], p=[0.4, 0.6]))
-    else:
-        rooms = int(rng.choice([3, 4], p=[0.6, 0.4]))
+    # ── Площадь и комнаты ─────────────────────────────────────────
+    area  = round(float(np.clip(rng.lognormal(3.85, 0.45), 18, 150)), 1)
+    rooms = pick_rooms(area)
 
-    house_type  = str(rng.choice(HOUSE_TYPES, p=HOUSE_PROBS))
+    # ── Расстояние от центра — привязано к микрорайону ───────────
+    base_dist = NBHD_DIST[nbhd]
+    dist_center = round(float(np.clip(
+                       rng.normal(base_dist, 1.2), 0.3, 25)), 1)
+
+    # ── Прочие атрибуты ───────────────────────────────────────────
     renovation  = str(rng.choice(RENOV_TYPES, p=RENOV_PROBS))
     has_parking = int(rng.choice([0, 1], p=[0.55, 0.45]))
     has_balcony = int(rng.choice([0, 1], p=[0.30, 0.70]))
 
-    floor_mult = 0.96 if floor == 1 else (0.97 if floor == total_floors else 1.00)
+    floor_mult = floor_multiplier(floor, total_floors)
+
+    # ── Бонус за год постройки (новостройки дороже) ──────────────
+    year_mult = 1.0 + 0.003 * (year_built - 1995)  # ±2% на каждые 10 лет
 
     price_per_m2 = int(
         BASE_PRICE
@@ -96,11 +195,12 @@ for i in range(N_ROWS):
         * RENOV_MULT[renovation]
         * HOUSE_MULT[house_type]
         * floor_mult
+        * year_mult
         * (1 + has_parking * 0.03)
         * (1 + has_balcony * 0.02)
-        * float(rng.uniform(0.95, 1.05))
+        * float(rng.uniform(0.94, 1.06))
     )
-    price_total = round(price_per_m2 * area / 1000) * 1000  # до тысяч
+    price_total = round(price_per_m2 * area / 1000) * 1000
 
     records.append({
         "id":                          i + 1,
@@ -122,6 +222,12 @@ for i in range(N_ROWS):
     })
 
 df = pd.DataFrame(records)
+
+# ── Числовой код ремонта для корреляции ──────────────────────────
+df["ремонт_код"] = df["ремонт"].map(
+    {"без ремонта": 1, "косметический": 2, "евроремонт": 3, "дизайнерский": 4}
+)
+
 df.to_csv("ryazan_real_estate.csv", index=False, encoding="utf-8-sig", decimal=",")
 print(f"✅ Датасет: {len(df)} строк, {df.shape[1]} признаков")
 print(df[["площадь_м2", "комнат", "цена_за_м2", "цена_руб"]].describe().round(0))
@@ -165,16 +271,16 @@ plt.sca(axes[1, 1]); plt.xticks(rotation=20, ha="right")
 
 # 6. Матрица корреляций
 num_cols = ["площадь_м2", "комнат", "этаж", "год_постройки",
-            "удаленность_от_центра_км", "цена_за_м2"]
+            "удаленность_от_центра_км", "ремонт_код", "цена_руб"]
 corr = df[num_cols].corr()
 im = axes[1, 2].imshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
-labels = ["площадь", "комнат", "этаж", "год", "до_центра", "цена/м²"]
+labels = ["площадь", "комнат", "этаж", "год", "до_центра", "ремонт", "цена"]
 axes[1, 2].set_xticks(range(len(labels))); axes[1, 2].set_xticklabels(labels, rotation=30, ha="right", fontsize=8)
 axes[1, 2].set_yticks(range(len(labels))); axes[1, 2].set_yticklabels(labels, fontsize=8)
 for i in range(len(labels)):
     for j in range(len(labels)):
         axes[1, 2].text(j, i, f"{corr.iloc[i,j]:.2f}", ha="center", va="center",
-                        fontsize=7, color="white" if abs(corr.iloc[i,j]) > 0.5 else "black")
+                        fontsize=6, color="white" if abs(corr.iloc[i,j]) > 0.55 else "black")
 axes[1, 2].set_title("Матрица корреляций")
 plt.colorbar(im, ax=axes[1, 2])
 
