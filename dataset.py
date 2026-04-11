@@ -104,7 +104,7 @@ for i in range(N_ROWS):
 
     records.append({
         "id":                          i + 1,
-        "адрес":                       f"г. Рязань, ул. {street}, д. {house_num}",
+        "адрес":                       f"г. Рязань, {street}, д. {house_num}",
         "административный_район":      admin,
         "микрорайон":                  nbhd,
         "площадь_м2":                  area,
